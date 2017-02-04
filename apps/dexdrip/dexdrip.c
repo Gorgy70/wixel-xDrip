@@ -58,11 +58,13 @@ radio_channel: See description in radio_link.h.
 
 #define USE_GEO_LOCATION
 #define GET_BATTERY_STATUS
-#define USE_UDP_UPLINK
+//#define USE_UDP_UPLINK
 #define USE_HTTP_UPLINK
 #define USE_SMS_CONTROL
 
 #define GSM_USE_DTR_PIN
+//#define MTS
+#define GSM_NO_OFF
 
 //#define DEBUG
 
@@ -105,7 +107,9 @@ void gsm_uplink ();
 void usb_printf (const char *format, ...);
 void gsm_wake_serial ();
 int gsm_sleep_mode ();
+#ifdef USE_SMS_CONTROL
 int gsm_send_sms();
+#endif
 void killWithWatchdog ();
 void loadSettingsFromFlash();
 
@@ -136,12 +140,18 @@ void setADCInputs ();
 #ifndef CUSTOM_TRANSMITTER_ID
 #warning "Using built-in transmitter id and defines from dexdrip.c"
 
-static CODE const char transmitter_id[] = "ABCDE";                                               //
+static CODE const char transmitter_id[] = "69NL1";                                               //
+//static CODE const char transmitter_id[] = "62GXY";                                               //
+//static CODE const char transmitter_id[] = "63GED";                                               //
+//static CODE const char transmitter_id[] = "ABCDE";                                               //
 
-#define my_webservice_url	"parakeet-receiver.appspot.com/receiver.cgi"
+//#define my_webservice_url	"http://dexcom-anna.appspot.com/receiver.cgi"
+//#define my_webservice_url	"http://parakeet-cloud.appspot.com/receiver.cgi"
+#define my_webservice_url	"http://parakeet.esen.ru/receiver.cgi"
 #define my_webservice_reply     "!ACK"
 #define my_user_agent 		"xDrip"
-#define my_gprs_apn		"apn.check.your.carrier.info"
+//#define my_gprs_apn		"internet.beeline.ru"
+#define my_gprs_apn		"internet.mts.ru"
 
 #define my_udp_server_host	"disabled"
 #define my_udp_server_port	"12345"
@@ -212,6 +222,7 @@ static XDATA uint32 catch_offsets[NUM_CHANNELS] = { 0, 0, 0, 0 };
 
 static uint8 wake_error_count = 0;
 static uint8 last_catch_channel = 0;
+static uint8 first_gsm_uplink = 1;
 BIT needsTimingCalibration = 1;
 BIT usbEnabled = 1;
 BIT writing_flash = 0;
@@ -933,10 +944,14 @@ CODE Serial_cmd *gsm_cmd = full_gsm_cmd;
 #ifdef USE_SMS_CONTROL
 static const Serial_cmd CODE sms_cmd[] =
 {
+#ifndef GSM_NO_OFF
     {"ATZ", "OK", 10},
     {"ATE0","OK", 2},
+#ifdef GSM_USE_DTR_PIN
     {"AT+CSCLK=1", "OK", 2},
+#endif
     {"AT+CFUN=1", "OK", 30},
+#endif
     {"AT+CMGF=1","OK",2},
 #ifdef GET_BATTERY_STATUS
     {"AT+CBC","+CBC: ",2,CODE_BATTERY_STATUS},
@@ -949,13 +964,41 @@ static const Serial_cmd CODE sms_cmd[] =
 };
 #endif
 
+const Serial_cmd CODE send_only_gsm_cmd[] =
+{
+#ifdef GET_BATTERY_STATUS
+    {"AT+CBC","+CBC: ",2,CODE_BATTERY_STATUS},
+#endif
+#ifdef USE_GEO_LOCATION
+    {"AT+CIPGSMLOC=1,1","+CIPGSMLOC: ",15,CODE_GEO_LOCATION},
+#endif
+
+#ifdef USE_HTTP_UPLINK
+    {"AT+HTTPTERM", "", 2},
+    {"AT+HTTPINIT", "", 10},
+    {"AT+HTTPPARA=\"CID\",1", "OK", 2},
+    {
+        "AT+HTTPPARA=\"URL\",\"%s%s\"", "OK",
+        2,CODE_HTTP_UPLINK
+    },
+    {"AT+HTTPPARA=\"UA\",\"" my_user_agent "\"", "OK", 2},
+    {"AT+HTTPACTION=0", "+HTTPACTION: 0,200,", 60},
+    {"AT+HTTPREAD", my_webservice_reply , 2, CODE_WEB_REPLY},
+    {"AT+HTTPTERM", "OK", 2},
+#endif
+
+// end of sequence marker
+    {"END", "END", 255}
+};
 
 const Serial_cmd CODE full_gsm_cmd[] =
 {
     {"ATZ", "OK", 10},
     {"ATE0","OK", 2},
     {"AT+CFUN=0", "", 10},
+#ifdef GSM_USE_DTR_PIN
     {"AT+CSCLK=1", "OK", 2},
+#endif
     {"AT+CFUN=1", "Call Ready", 30},
 
 #ifdef GET_BATTERY_STATUS
@@ -965,7 +1008,13 @@ const Serial_cmd CODE full_gsm_cmd[] =
     {"AT+SAPBR=0,1", "", 3},
     {"AT+SAPBR=3,1,\"Contype\",\"GPRS\"", "OK", 2},
     {"AT+SAPBR=3,1,\"APN\",\"%s\"", "OK", 2,CODE_APN_POPULATE},
-    {"AT+SAPBR=1,1", "OK", 30},
+
+#ifdef MTS
+    {"AT+SAPBR=3,1,\"USER\",\"mts\"", "OK", 2},
+    {"AT+SAPBR=3,1,\"PWD\",\"mts\"", "OK", 2},
+#endif
+
+    {"AT+SAPBR=1,1", "OK", 120},
 
 #ifdef USE_GEO_LOCATION
     {"AT+CIPGSMLOC=1,1","+CIPGSMLOC: ",15,CODE_GEO_LOCATION},
@@ -998,6 +1047,7 @@ const Serial_cmd CODE full_gsm_cmd[] =
     {"AT+HTTPTERM", "", 2},
     {"AT+HTTPINIT", "", 10},
     {"AT+HTTPPARA=\"CID\",1", "OK", 2},
+//    {"AT+HTTPPARA=\"REDIR\",1", "OK", 2},
     {
         "AT+HTTPPARA=\"URL\",\"%s%s\"", "OK",
         2,CODE_HTTP_UPLINK
@@ -1007,6 +1057,12 @@ const Serial_cmd CODE full_gsm_cmd[] =
     {"AT+HTTPREAD", my_webservice_reply , 2, CODE_WEB_REPLY},
     {"AT+HTTPTERM", "OK", 2},
 #endif
+
+//   {"AT+HTTPPARA=\"UA\",\"" my_user_agent "\"", "OK", 2},
+//    {"AT+HTTPACTION=0", "+HTTPACTION: 0,200,", 60},
+//    {"AT+HTTPACTION=0", "+HTTPACTION: 0,", 60},
+//    {"AT+HTTPREAD", my_webservice_reply , 2, CODE_WEB_REPLY},
+//    {"AT+HTTPREAD", "OK" , 2},
 
 // end of sequence marker
     {"END", "END", 255}
@@ -1430,7 +1486,20 @@ print_packet (Dexcom_packet * pPkt)
     if (use_gsm)
     {
         last_dex_battery = pPkt->battery;
+#ifdef GSM_NO_OFF
+        if (first_gsm_uplink) 
+        {
+          gsm_cmd = full_gsm_cmd;
+          first_gsm_uplink  = 0;
+        } else
+        {
+          gsm_cmd = send_only_gsm_cmd;
+        }
+#endif
         gsm_uplink ();		// send data via gsm / gprs
+#ifdef GSM_NO_OFF
+        gsm_cmd = full_gsm_cmd;
+#endif
 
         gsm_delay = (getMs () - gsm_delay) / 1000;
 
@@ -1562,6 +1631,7 @@ gsm_send_command (const char *command, const char *response, int timeout)
     return gsm_send_command_getdata(command,response,timeout,0);
 }
 
+#ifdef USE_SMS_CONTROL
 int
 gsm_send_sms()
 {
@@ -1576,6 +1646,7 @@ gsm_send_sms()
         return 0;
     }
 }
+#endif
 
 /////////////////////////////
 
@@ -1972,10 +2043,13 @@ gsm_sleep_mode ()
 #ifdef GSM_USE_DTR_PIN
         gsm_send_command ("AT+CSCLK=1", "OK", 2);
 #else
-        gsm_send_command ("ATZ", "OK", 2);
+        gsm_send_command ("AT+CSCLK=2", "OK", 2);
+//        gsm_send_command ("ATZ", "OK", 2);
 #endif
+#ifndef GSM_NO_OFF
         if (!gsm_send_command ("AT+CFUN=0", "OK", 10)) result = 0; // pass error
         delayMs (2000);
+#endif
 #ifdef GSM_USE_DTR_PIN
         setDigitalOutput (13, HIGH);	// P1_3 set high to sleep
 #endif
@@ -1995,6 +2069,8 @@ __reentrant
     usb_printf ("Waking GSM\r\n");
 #ifdef GSM_USE_DTR_PIN
     setDigitalOutput (13, LOW);	// P1_3 set low to wake
+#else
+    uart1TxSendByte (27); // ESC
 #endif
     for (i = 0; i < 10; i++)
     {
