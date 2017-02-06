@@ -951,6 +951,8 @@ static const Serial_cmd CODE sms_cmd[] =
     {"AT+CSCLK=1", "OK", 2},
 #endif
     {"AT+CFUN=1", "OK", 30},
+#else
+    {"AT+CNETLIGHT=1","OK",2},
 #endif
     {"AT+CMGF=1","OK",2},
 #ifdef GET_BATTERY_STATUS
@@ -966,6 +968,7 @@ static const Serial_cmd CODE sms_cmd[] =
 
 const Serial_cmd CODE send_only_gsm_cmd[] =
 {
+    {"AT+CNETLIGHT=1","OK",2},
 #ifdef GET_BATTERY_STATUS
     {"AT+CBC","+CBC: ",2,CODE_BATTERY_STATUS},
 #endif
@@ -2049,6 +2052,8 @@ gsm_sleep_mode ()
 #ifndef GSM_NO_OFF
         if (!gsm_send_command ("AT+CFUN=0", "OK", 10)) result = 0; // pass error
         delayMs (2000);
+#else
+        gsm_send_command ("AT+CNETLIGHT=0", "OK", 2);
 #endif
 #ifdef GSM_USE_DTR_PIN
         setDigitalOutput (13, HIGH);	// P1_3 set high to sleep
@@ -2069,8 +2074,6 @@ __reentrant
     usb_printf ("Waking GSM\r\n");
 #ifdef GSM_USE_DTR_PIN
     setDigitalOutput (13, LOW);	// P1_3 set low to wake
-#else
-    uart1TxSendByte (27); // ESC
 #endif
     for (i = 0; i < 10; i++)
     {
